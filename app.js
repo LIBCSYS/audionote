@@ -14,7 +14,7 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '0.00.5';
+const VERSION    = '1.0Delta';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
 
 app.use(express.json({ limit: '10mb' }));
@@ -179,6 +179,9 @@ app.get('/api/songs/:id/timestamps', (req, res) => {
 
 app.post('/api/songs/:id/timestamps', (req, res) => {
   const { time_seconds, label = '', category = '' } = req.body;
+  if (typeof time_seconds !== 'number' || !isFinite(time_seconds) || time_seconds < 0) {
+    return res.status(400).json({ error: 'time_seconds must be a non-negative number' });
+  }
   const result = db.prepare(
     'INSERT INTO timestamps (song_id, time_seconds, label, category) VALUES (?, ?, ?, ?)'
   ).run(req.params.id, time_seconds, label, category);
@@ -476,9 +479,16 @@ app.get('/audio/:id', (req, res) => {
   const range    = req.headers.range;
 
   if (range) {
-    const [s, e]  = range.replace(/bytes=/, '').split('-');
-    const start   = parseInt(s, 10);
-    const end     = e ? parseInt(e, 10) : fileSize - 1;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    // Suffix range (bytes=-N) means "last N bytes"
+    let start = m && m[1] !== '' ? parseInt(m[1], 10)
+              : m && m[2] !== '' ? Math.max(0, fileSize - parseInt(m[2], 10))
+              : NaN;
+    let end   = m && m[1] !== '' && m[2] !== '' ? parseInt(m[2], 10) : fileSize - 1;
+    if (isNaN(start) || start >= fileSize || start > end) {
+      return res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` }).end();
+    }
+    end = Math.min(end, fileSize - 1);
     res.writeHead(206, {
       'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges':  'bytes',

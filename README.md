@@ -6,7 +6,7 @@
 
 **Local-first music catalog, annotation, and live timestamp tool**
 
-[![Version](https://img.shields.io/badge/version-0.00.4-7b68ee?style=flat-square)](https://github.com/LIBCSYS/audionote/releases)
+[![Version](https://img.shields.io/badge/version-1.0Delta-7b68ee?style=flat-square)](https://github.com/LIBCSYS/audionote/releases)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![SQLite](https://img.shields.io/badge/SQLite-built--in-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://nodejs.org/api/sqlite.html)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)

@@ -1,14 +1,16 @@
 {
   "name": "audionote",
-  "version": "0.0.1",
+  "version": "1.0.0-delta",
   "description": "Local-first music catalog, annotation, and timestamp marking tool",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
   },
   "dependencies": {
-    "better-sqlite3": "^9.6.0",
     "express": "^4.18.2",
     "music-metadata": "7.14.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^9.6.0"
   }
 }

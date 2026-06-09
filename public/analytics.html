@@ -82,6 +82,8 @@
 </div>
 
 <script>
+const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 (async () => {
   const r = await fetch('/api/analytics');
   const d = await r.json();
@@ -121,7 +123,7 @@
   const maxPath = Math.max(...d.topPaths.map(p => p.hits), 1);
   document.getElementById('top-paths').innerHTML = d.topPaths.map(p => `
     <div class="bar-row">
-      <span class="bar-label" title="${p.path}">${p.path}</span>
+      <span class="bar-label" title="${esc(p.path)}">${esc(p.path)}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${Math.round(p.hits/maxPath*100)}%"></div></div>
       <span class="bar-val">${p.hits}</span>
     </div>
@@ -132,12 +134,12 @@
   tbody.innerHTML = d.recent.map(v => {
     const statusCls = v.status >= 400 ? 'status-err' : 'status-ok';
     return `<tr>
-      <td class="ts">${v.ts}</td>
-      <td>${v.method}</td>
-      <td class="path">${v.path}</td>
-      <td class="${statusCls}">${v.status}</td>
-      <td class="ip">${v.ip}</td>
-      <td class="ms">${v.ms}</td>
+      <td class="ts">${esc(v.ts)}</td>
+      <td>${esc(v.method)}</td>
+      <td class="path">${esc(v.path)}</td>
+      <td class="${statusCls}">${esc(v.status)}</td>
+      <td class="ip">${esc(v.ip)}</td>
+      <td class="ms">${esc(v.ms)}</td>
     </tr>`;
   }).join('');
 })();

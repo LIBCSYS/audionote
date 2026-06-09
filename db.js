@@ -17,6 +17,8 @@ db.exec('PRAGMA foreign_keys = ON;');
 
 // Migrations — safe to run on every start
 try { db.exec('ALTER TABLE songs ADD COLUMN deleted_at TEXT'); } catch {}
+// One note per song — app upserts assume this; skipped silently if legacy dup rows exist
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS song_notes_song_id ON song_notes(song_id)'); } catch {}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS visits (
