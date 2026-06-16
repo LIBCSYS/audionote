@@ -6,7 +6,7 @@
 
 **Local-first music catalog, annotation, and live timestamp tool**
 
-[![Version](https://img.shields.io/badge/version-1.0Delta-7b68ee?style=flat-square)](https://github.com/LIBCSYS/audionote/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-7b68ee?style=flat-square)](https://github.com/LIBCSYS/audionote/releases)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![SQLite](https://img.shields.io/badge/SQLite-built--in-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://nodejs.org/api/sqlite.html)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -35,13 +35,13 @@ It is not a streaming service. It does not sync to the cloud. It does not requir
 
 | | |
 |---|---|
-| 🎵 **Catalog** | Recursively scans one or more folders for `.mp3` files, reads ID3 tags (title, artist, album, duration) |
+| 🎵 **Catalog** | Recursively scans one or more folders for audio files — `.mp3 .m4a .wav .flac .ogg .aac` and more — reads ID3/tag metadata (title, artist, album, duration) |
 | ▶️ **Player** | Full-featured HTML5 audio player — seek, volume, progress bar — right in the browser |
 | ⏱ **Timestamp markers** | Press **Mark** (or hit `M`) while a track plays to pin the exact moment. Add a label after. Click any marker to jump back. |
 | 📝 **Song notes** | Freetext notes per track, auto-saved as you type |
 | 📁 **Multi-folder** | Add any number of scan folders; AudioNote remembers them across restarts. Rescan adds new files and soft-removes missing ones. |
 | 🔖 **Annotated filter** | Tracks with notes get a 📝 flag in the sidebar. One-click **Noted only** filter. |
-| ✏️ **Rename on disk** | Rename the actual `.mp3` file from the player — no file manager needed |
+| ✏️ **Rename on disk** | Rename the actual audio file from the player — no file manager needed |
 | 🗑 **Soft delete** | Remove a track from the library without touching the file. Notes and timestamps are preserved in the database forever. |
 | ⬇️ **CSV export** | Export your full catalog — notes and all timestamps — as a UTF-8 CSV ready for Excel or database import |
 | 💬 **Ask AudioNote** | Built-in AI chat assistant answers questions about your library and how the app works |
@@ -75,7 +75,7 @@ git clone https://github.com/LIBCSYS/AudioNote
 cd AudioNote
 ```
 
-Place the cloned folder **inside** your music directory. AudioNote scans its **parent folder** for MP3 files by default, so the layout should look like this:
+Place the cloned folder **inside** your music directory. AudioNote scans its **parent folder** for audio files by default, so the layout should look like this:
 
 ```
 your-music-folder/
@@ -116,7 +116,7 @@ your-music-folder/
 └── your mp3s ...
 ```
 
-**On Rescan**, AudioNote walks your configured folders, finds every `.mp3`, reads its ID3 tags via `music-metadata`, and writes new entries into `audionote.db`. Missing files are soft-deleted (record preserved, `deleted_at` stamped). Your existing notes and timestamps are never touched.
+**On Rescan**, AudioNote walks your configured folders, finds every supported audio file, reads its tags via `music-metadata`, and writes new entries into `audionote.db`. Missing files are soft-deleted (record preserved, `deleted_at` stamped). Your existing notes and timestamps are never touched.
 
 **Audio streaming** uses HTTP range requests so seeking works instantly without buffering the whole file.
 
@@ -172,7 +172,7 @@ One row per timestamp. Tracks with notes but no timestamps still get a row.
 - [x] Web demo — browser-native via File System Access API ([audionote.je9.us](https://audionote.je9.us))
 - [x] AI chat assistant (Ask AudioNote)
 - [x] Multi-format support in web mode (MP3, M4A, WAV, FLAC, OGG, AAC)
-- [ ] Multi-format support in local mode (FLAC, WAV, AAC, M4A)
+- [x] Multi-format support in local mode (FLAC, WAV, AAC, M4A, OGG, OPUS, and more)
 - [x] CSV import (v0.00.3 — round-trip + iTunes/Spotify/Last.fm column aliases)
 - [ ] Vocal line tabulation and markup
 - [ ] Chord / riff transposition tools

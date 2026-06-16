@@ -14,8 +14,24 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.0Delta';
+const VERSION    = '1.1.0';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
+
+// Supported audio formats for server-side scanning and streaming.
+// Web mode decodes files locally in the browser; server mode needs this
+// extension set (so non-MP3 files are cataloged) and a MIME map (so each
+// file streams with the correct Content-Type instead of always audio/mpeg).
+const AUDIO_EXTS = new Set([
+  '.mp3', '.m4a', '.mp4', '.aac', '.wav', '.flac',
+  '.ogg', '.oga', '.opus', '.webm', '.wma', '.aif', '.aiff',
+]);
+const MIME_BY_EXT = {
+  '.mp3': 'audio/mpeg',  '.m4a': 'audio/mp4',    '.mp4': 'audio/mp4',
+  '.aac': 'audio/aac',   '.wav': 'audio/wav',    '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',   '.oga': 'audio/ogg',    '.opus': 'audio/ogg',
+  '.webm': 'audio/webm', '.wma': 'audio/x-ms-wma',
+  '.aif': 'audio/aiff',  '.aiff': 'audio/aiff',
+};
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -52,7 +68,7 @@ function scanDir(dir, results = []) {
     const full = path.join(dir, item.name);
     if (item.isDirectory()) {
       if (path.normalize(full).toLowerCase() !== path.normalize(__dirname).toLowerCase()) scanDir(full, results);
-    } else if (item.isFile() && item.name.toLowerCase().endsWith('.mp3')) {
+    } else if (item.isFile() && AUDIO_EXTS.has(path.extname(item.name).toLowerCase())) {
       results.push(full);
     }
   }
@@ -118,7 +134,7 @@ app.post('/api/rescan', async (req, res) => {
     let added = 0;
     for (const fp of files) {
       const existing = db.prepare('SELECT id, deleted_at FROM songs WHERE filepath = ?').get(fp);
-      let title = path.basename(fp, '.mp3');
+      let title = path.basename(fp, path.extname(fp));
       let artist = '', album = '', duration_sec = 0;
       if (mm) {
         try {
@@ -476,6 +492,7 @@ app.get('/audio/:id', (req, res) => {
 
   const stat     = fs.statSync(song.filepath);
   const fileSize = stat.size;
+  const ctype    = MIME_BY_EXT[path.extname(song.filepath).toLowerCase()] || 'audio/mpeg';
   const range    = req.headers.range;
 
   if (range) {
@@ -493,13 +510,13 @@ app.get('/audio/:id', (req, res) => {
       'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges':  'bytes',
       'Content-Length': end - start + 1,
-      'Content-Type':   'audio/mpeg',
+      'Content-Type':   ctype,
     });
     fs.createReadStream(song.filepath, { start, end }).pipe(res);
   } else {
     res.writeHead(200, {
       'Content-Length': fileSize,
-      'Content-Type':   'audio/mpeg',
+      'Content-Type':   ctype,
       'Accept-Ranges':  'bytes',
     });
     fs.createReadStream(song.filepath).pipe(res);

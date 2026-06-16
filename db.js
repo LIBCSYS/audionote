@@ -15,11 +15,6 @@ const db = new DatabaseSync(path.join(__dirname, 'audionote.db'));
 try { db.exec('PRAGMA journal_mode = WAL;'); } catch {}
 db.exec('PRAGMA foreign_keys = ON;');
 
-// Migrations — safe to run on every start
-try { db.exec('ALTER TABLE songs ADD COLUMN deleted_at TEXT'); } catch {}
-// One note per song — app upserts assume this; skipped silently if legacy dup rows exist
-try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS song_notes_song_id ON song_notes(song_id)'); } catch {}
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS visits (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +45,8 @@ db.exec(`
     artist       TEXT DEFAULT '',
     album        TEXT DEFAULT '',
     duration_sec REAL DEFAULT 0,
-    created_at   TEXT DEFAULT (datetime('now'))
+    created_at   TEXT DEFAULT (datetime('now')),
+    deleted_at   TEXT
   );
 
   CREATE TABLE IF NOT EXISTS song_notes (
@@ -69,5 +65,13 @@ db.exec(`
     created_at   TEXT DEFAULT (datetime('now'))
   );
 `);
+
+// ── Migrations for upgrading older databases ──────────────
+// Run AFTER table creation so a fresh install already has the columns/tables.
+// Each is wrapped: it harmlessly fails (and is ignored) when already applied.
+// Legacy DBs created before deleted_at existed get the column added here.
+try { db.exec('ALTER TABLE songs ADD COLUMN deleted_at TEXT'); } catch {}
+// One note per song — app upserts assume this; skipped silently if legacy dup rows exist
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS song_notes_song_id ON song_notes(song_id)'); } catch {}
 
 module.exports = db;
