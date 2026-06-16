@@ -5,3 +5,4 @@ audionote.db-shm
 audionote.db-wal
 demo-music/
 sample-music/
+package-lock.json

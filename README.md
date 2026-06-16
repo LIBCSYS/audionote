@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="logo.png" width="140" alt="AudioNote Logo">
+<img src="assets/logo.png" width="140" alt="AudioNote Logo">
 
 # AudioNote
 
 **Local-first music catalog, annotation, and live timestamp tool**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-7b68ee?style=flat-square)](https://github.com/LIBCSYS/audionote/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-7b68ee?style=flat-square)](https://github.com/LIBCSYS/AudioNote/releases)
 [![Node.js](https://img.shields.io/badge/Node.js-22.5+-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![SQLite](https://img.shields.io/badge/SQLite-built--in-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://nodejs.org/api/sqlite.html)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -44,7 +44,6 @@ It is not a streaming service. It does not sync to the cloud. It does not requir
 | ✏️ **Rename on disk** | Rename the actual audio file from the player — no file manager needed |
 | 🗑 **Soft delete** | Remove a track from the library without touching the file. Notes and timestamps are preserved in the database forever. |
 | ⬇️ **CSV export** | Export your full catalog — notes and all timestamps — as a UTF-8 CSV ready for Excel or database import |
-| 💬 **Ask AudioNote** | Built-in AI chat assistant answers questions about your library and how the app works |
 | 🌐 **Network access** | Binds to `0.0.0.0`; accessible from any machine on your local network or VPN |
 | 🖥️ **Web mode** | Public demo at [audionote.je9.us](https://audionote.je9.us) — pick files directly from your browser, nothing uploaded |
 
@@ -170,7 +169,6 @@ One row per timestamp. Tracks with notes but no timestamps still get a row.
 ## 🗺 Roadmap
 
 - [x] Web demo — browser-native via File System Access API ([audionote.je9.us](https://audionote.je9.us))
-- [x] AI chat assistant (Ask AudioNote)
 - [x] Multi-format support in web mode (MP3, M4A, WAV, FLAC, OGG, AAC)
 - [x] Multi-format support in local mode (FLAC, WAV, AAC, M4A, OGG, OPUS, and more)
 - [x] CSV import (v0.00.3 — round-trip + iTunes/Spotify/Last.fm column aliases)
@@ -189,7 +187,7 @@ MIT — do whatever you want with it.
 
 <div align="center">
 
-<img src="logo-small.png" width="48" alt="AudioNote">
+<img src="assets/logo-small.png" width="48" alt="AudioNote">
 
 *A [TheRatsAsses](https://theratsasses.com) Music Release — dba [LIBCSystems LLC](https://libcsys.com) · © 2026 LIBCSystems LLC*
 

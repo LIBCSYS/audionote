@@ -14,7 +14,7 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.1.0';
+const VERSION    = '1.2.0';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
 
 // Supported audio formats for server-side scanning and streaming.
@@ -550,6 +550,9 @@ app.post('/api/songs/web-upsert', (req, res) => {
   res.json(result);
 });
 
+
+// App version — single source of truth for the UI footer
+app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 
 // Catch-all 404
 app.use((req, res) => {

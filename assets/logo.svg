@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#9b8ff8"/>
-      <stop offset="100%" stop-color="#3d25c9"/>
+      <stop offset="0%" stop-color="#ffb061"/>
+      <stop offset="100%" stop-color="#ef8316"/>
     </linearGradient>
     <linearGradient id="shine" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="rgba(255,255,255,0.18)"/>
@@ -22,10 +22,10 @@
 
   <!-- Eighth note (♪) — white, centered slightly left -->
   <!-- Note head: tilted filled ellipse -->
-  <ellipse cx="200" cy="348" rx="72" ry="52" fill="white" transform="rotate(-18 200 348)"/>
+  <ellipse cx="200" cy="348" rx="72" ry="52" fill="#1a1208" transform="rotate(-18 200 348)"/>
 
   <!-- Stem: right edge of note head upward -->
-  <rect x="258" y="148" width="26" height="210" rx="13" fill="white"/>
+  <rect x="258" y="148" width="26" height="210" rx="13" fill="#1a1208"/>
 
   <!-- Flag: curves right then sweeps back down -->
   <path d="M284 148
@@ -34,15 +34,15 @@
            C 355 318, 368 288, 360 248
            C 350 205, 326 178, 284 165
            Z"
-        fill="white"/>
+        fill="#1a1208"/>
 
   <!-- Pencil / annotation mark — lower right, subtle -->
   <g transform="translate(310,370) rotate(-38)" opacity="0.92">
     <!-- Pencil body -->
-    <rect x="0" y="0" width="18" height="68" rx="3" fill="white"/>
+    <rect x="0" y="0" width="18" height="68" rx="3" fill="#1a1208"/>
     <!-- Pencil tip -->
-    <polygon points="0,68 18,68 9,90" fill="rgba(255,255,255,0.75)"/>
+    <polygon points="0,68 18,68 9,90" fill="rgba(26,18,8,0.72)"/>
     <!-- Pencil eraser band -->
-    <rect x="0" y="0" width="18" height="12" rx="3" fill="rgba(255,255,255,0.5)"/>
+    <rect x="0" y="0" width="18" height="12" rx="3" fill="rgba(26,18,8,0.45)"/>
   </g>
 </svg>
