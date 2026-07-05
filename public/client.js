@@ -743,8 +743,16 @@ async function addFromUrl() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
-    const song = await res.json();
-    if (!res.ok) throw new Error(song.error || `HTTP ${res.status}`);
+    // Parse defensively — a proxy timeout or error page can return HTML, not JSON.
+    const raw = await res.text();
+    let song;
+    try { song = JSON.parse(raw); } catch {
+      throw new Error(res.status >= 500
+        ? 'The server hit an error fetching that link — try a direct audio link (.mp3/.m4a).'
+        : 'Unexpected response from the server. Please try again.');
+    }
+    if (song && song.error) throw new Error(song.error);
+    if (!res.ok || !song || !song.id) throw new Error('Could not add that URL.');
 
     // Merge into the library (same pattern as Add Files)
     const i = state.songs.findIndex(s => s.id === song.id);

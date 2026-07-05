@@ -16,7 +16,7 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.3.0';
+const VERSION    = '1.3.1';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
 
 // ── Add from URL (yt-dlp) ────────────────────────────────
@@ -598,10 +598,25 @@ function runYtdlp(url, outTemplate) {
   });
 }
 
+// Turn raw yt-dlp failures into a short, human message. Returned with HTTP 200
+// so a reverse proxy's HTML error pages can't replace the JSON body.
+function friendlyYtdlpError(msg) {
+  const m = String(msg || '');
+  if (/sign in to confirm|not a bot|cookies/i.test(m))
+    return 'That site blocked the request from this server (YouTube does this to shared/datacenter IPs). Try a direct audio-file link (.mp3/.m4a), a non-YouTube source, or set YTDLP_PROXY.';
+  if (/unsupported url|no video formats|unable to (extract|download)|not a valid url/i.test(m))
+    return 'Couldn’t find audio at that link.';
+  if (/private|members-only|login required|age|drm/i.test(m))
+    return 'That link needs sign-in or is restricted, so its audio can’t be fetched.';
+  if (/timed out|timeout|etimedout/i.test(m))
+    return 'That link took too long to fetch. Try again, or use a direct audio link.';
+  return m.replace(/^ERROR:\s*/i, '').replace(/\s+See\s+https?:\/\/\S+.*$/i, '').slice(0, 240) || 'Extraction failed.';
+}
+
 app.post('/api/songs/from-url', async (req, res) => {
   const url = ((req.body && req.body.url) || '').trim();
   if (!/^https?:\/\/\S+$/i.test(url)) {
-    return res.status(400).json({ error: 'Enter a valid http(s) URL' });
+    return res.json({ error: 'Enter a valid http(s) URL' });
   }
   try {
     // Dedupe: if we already have this URL live, hand back the existing song.
@@ -617,7 +632,7 @@ app.post('/api/songs/from-url', async (req, res) => {
 
     const meta = await runYtdlp(url, outTmpl);
     if (!fs.existsSync(finalPath)) {
-      return res.status(422).json({ error: 'No audio could be extracted from that URL' });
+      return res.json({ error: 'No audio could be extracted from that URL' });
     }
 
     const title = meta.title || url.replace(/^https?:\/\//, '').slice(0, 120);
@@ -631,7 +646,9 @@ app.post('/api/songs/from-url', async (req, res) => {
     });
   } catch (e) {
     console.error('[AudioNote] from-url error:', e.message);
-    res.status(500).json({ error: e.message || 'Extraction failed' });
+    // 200 + JSON envelope: an expected user-facing failure, not a server fault,
+    // and it survives reverse proxies that swap error responses for HTML pages.
+    res.json({ error: friendlyYtdlpError(e.message) });
   }
 });
 

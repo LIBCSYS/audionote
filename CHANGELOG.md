@@ -3,6 +3,16 @@
 All notable changes to AudioNote are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] — 2026-07-05
+
+### Fixed
+- **Add from URL now fails gracefully.** Extraction failures (a blocked site, an
+  unsupported link, no audio) return a short human-readable message as an HTTP
+  200 JSON envelope instead of a 5xx — so a reverse proxy that swaps error
+  responses for an HTML page can no longer break the client with a JSON parse
+  error (`Unexpected token '<'`). The client also parses defensively and shows a
+  clear message for any non-JSON response.
+
 ## [1.3.0] — 2026-07-04
 
 ### Added
