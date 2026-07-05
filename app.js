@@ -16,7 +16,7 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.3.1';
+const VERSION    = '1.3.2';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
 
 // ── Add from URL (yt-dlp) ────────────────────────────────
@@ -568,7 +568,7 @@ app.post('/api/songs/web-upsert', (req, res) => {
 // ── Add from URL ─────────────────────────────────────────
 // Runs yt-dlp to extract audio from any supported URL, caches it as mp3,
 // and inserts a songs row. Returns the same song shape as web-upsert.
-function runYtdlp(url, outTemplate) {
+function runYtdlp(url, outTemplate, useProxy) {
   return new Promise((resolve, reject) => {
     const args = [
       '-x', '--audio-format', 'mp3',
@@ -577,7 +577,7 @@ function runYtdlp(url, outTemplate) {
       '--print', '%(title)s\t%(uploader)s\t%(duration)s\t%(thumbnail)s',
       '-o', outTemplate,
     ];
-    if (YTDLP_PROXY) args.push('--proxy', YTDLP_PROXY);
+    if (useProxy && YTDLP_PROXY) args.push('--proxy', YTDLP_PROXY);
     args.push(url);
     const proc = spawn(YTDLP_BIN, args, { timeout: 180000 });
     let out = '', err = '';
@@ -630,7 +630,16 @@ app.post('/api/songs/from-url', async (req, res) => {
     const outTmpl   = path.join(URL_CACHE, `${key}.%(ext)s`);
     const finalPath = path.join(URL_CACHE, `${key}.mp3`);
 
-    const meta = await runYtdlp(url, outTmpl);
+    // Try direct first (so direct/most URLs never depend on the proxy), then
+    // fall back to YTDLP_PROXY only if the direct attempt fails (e.g. a
+    // datacenter-IP bot-wall). Keeps extraction working even if the proxy is down.
+    let meta;
+    try {
+      meta = await runYtdlp(url, outTmpl, false);
+    } catch (eDirect) {
+      if (!YTDLP_PROXY) throw eDirect;
+      meta = await runYtdlp(url, outTmpl, true);
+    }
     if (!fs.existsSync(finalPath)) {
       return res.json({ error: 'No audio could be extracted from that URL' });
     }

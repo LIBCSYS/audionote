@@ -3,6 +3,15 @@
 All notable changes to AudioNote are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] — 2026-07-05
+
+### Changed
+- **Add from URL is resilient to a down proxy.** When `YTDLP_PROXY` is set,
+  extraction now tries a direct connection first and only falls back to the
+  proxy if that fails — so direct-audio links and non-blocked sites keep working
+  even if the proxy is unavailable, and the proxy is reserved for sites that
+  actually need it (e.g. YouTube on a datacenter IP).
+
 ## [1.3.1] — 2026-07-05
 
 ### Fixed
