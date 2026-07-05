@@ -7,6 +7,28 @@
   <meta name="description" content="Local-first music catalog and annotation tool. Drop timestamp markers and write per-track notes — your data stays on your machine.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="style.css">
+  <style>
+    /* ── ADD FROM URL ── */
+    .btn-addurl{ display:flex; align-items:center; justify-content:center; gap:6px; }
+    .badge-new{ background:var(--signal); color:#16100a; font-size:9px; font-weight:800; letter-spacing:.06em; padding:1px 5px; border-radius:4px; line-height:1.5; }
+    #url-panel{ padding:2px 0 4px; }
+    #url-panel.hidden{ display:none; }
+    .url-add-row{ display:flex; gap:6px; }
+    .url-add-row input{ flex:1; min-width:0; background:var(--bg); border:1px solid var(--line); color:var(--text); padding:7px 9px; border-radius:7px; font-size:12px; font-family:var(--font-mono); outline:none; }
+    .url-add-row input:focus{ border-color:var(--signal-line); }
+    .url-add-row button{ background:var(--signal); color:#16100a; border:none; border-radius:7px; width:30px; font-size:16px; font-weight:700; cursor:pointer; flex-shrink:0; }
+    .url-add-row button:hover{ background:var(--signal-hi); }
+    .url-add-row button:disabled{ opacity:.5; cursor:default; }
+    .url-status{ font-size:11px; line-height:1.45; margin-top:6px; min-height:0; }
+    .url-status.working{ color:var(--muted); }
+    .url-status.err{ color:var(--danger); }
+    .url-status.ok{ color:var(--ok); }
+    /* ── NEW-FEATURE BANNER ── */
+    .home-newbanner{ display:flex; align-items:center; gap:11px; max-width:600px; margin:0 auto 22px; padding:11px 15px; border:1px solid var(--signal-line); border-radius:var(--radius); background:var(--signal-wash); text-align:left; }
+    .home-newbanner .nb-tag{ background:var(--signal); color:#16100a; font-size:10px; font-weight:800; letter-spacing:.07em; padding:3px 7px; border-radius:5px; flex-shrink:0; }
+    .home-newbanner .nb-text{ font-size:13px; color:var(--text); line-height:1.45; }
+    .home-newbanner .nb-date{ color:var(--muted); font-size:12px; }
+  </style>
 </head>
 <body>
 <div id="app">
@@ -23,6 +45,14 @@
       <input type="text" id="search-input" placeholder="Search tracks..." autocomplete="off">
       <button id="noted-filter" class="btn-filter">📝 Noted only</button>
       <button id="rescan-btn" class="btn-secondary">↻ Scan Library</button>
+      <button id="add-url-btn" class="btn-secondary btn-addurl">🔗 Add from URL <span class="badge-new">NEW</span></button>
+      <div id="url-panel" class="hidden">
+        <div class="url-add-row">
+          <input type="text" id="url-input" placeholder="Paste a YouTube or audio URL…" autocomplete="off" spellcheck="false">
+          <button id="url-go-btn" title="Fetch audio">→</button>
+        </div>
+        <div id="url-status" class="url-status"></div>
+      </div>
       <a id="export-btn" href="/api/export/csv" class="btn-secondary btn-export">⬇ Export CSV</a>
       <button id="import-btn" class="btn-secondary btn-import">⬆ Import CSV</button>
       <input type="file" id="import-file" accept=".csv,.txt" style="display:none">
@@ -54,6 +84,11 @@
   <main id="main">
 
     <div id="empty-state">
+
+      <div class="home-newbanner">
+        <span class="nb-tag">NEW</span>
+        <span class="nb-text"><strong>Internet URLs now supported.</strong> Paste a YouTube link or any audio URL and annotate it just like your own files. <span class="nb-date">— as of July 4th, 2026.</span> <a href="#" id="try-sample-link" style="color:var(--signal);font-weight:600;text-decoration:none">▶ Try a sample clip</a></span>
+      </div>
 
       <div class="home-hero">
         <div class="home-logo-wrap"><img src="/logo.svg" class="home-logo" alt="AudioNote"></div>
@@ -104,6 +139,12 @@
             <div class="feat-icon-wrap c-amber">📝</div>
             <div class="feat-title">Per-track notes</div>
             <div class="feat-desc">Write freeform notes about the whole track — lyrics, chords, production thoughts. Auto-saved as you type. Filter to show only annotated tracks.</div>
+          </div>
+
+          <div class="home-feat">
+            <div class="feat-icon-wrap c-blue">🔗</div>
+            <div class="feat-title">Add from a URL <span class="badge-new">NEW</span></div>
+            <div class="feat-desc">Paste a YouTube, SoundCloud, or direct audio link. AudioNote pulls the audio server-side (via yt-dlp) and adds it to your library — ready to timestamp and note like any other track.</div>
           </div>
 
           <div class="home-feat">
@@ -216,7 +257,7 @@
 <footer id="about-footer">
     <span class="about-name">AudioNote</span>
     <span class="about-sep">·</span>
-    <span class="about-version" id="app-version">v1.2.0</span>
+    <span class="about-version" id="app-version">v1.3.0</span>
     <span class="about-sep">·</span>
     <a href="https://theratsasses.com" target="_blank" rel="noopener" class="about-brand about-link">A TheRatsAsses Music Release</a>
     <span class="about-sep">·</span>

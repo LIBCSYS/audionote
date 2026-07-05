@@ -3,6 +3,8 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const crypto  = require('crypto');
+const { spawn } = require('child_process');
 const db      = require('./db');
 
 let mm;
@@ -14,8 +16,20 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.2.0';
+const VERSION    = '1.3.0';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
+
+// ── Add from URL (yt-dlp) ────────────────────────────────
+// Any http(s) URL with audio — YouTube, SoundCloud, Bandcamp, a bare .mp3,
+// anything yt-dlp supports — is downloaded/transcoded to mp3 in url-cache/
+// and cataloged as a normal song, so the existing player + notes just work.
+// Requires yt-dlp and ffmpeg on PATH (see README). Optional YTDLP_PROXY routes
+// extraction through a proxy (e.g. socks5://host:port) when a site blocks the
+// server's IP.
+const YTDLP_BIN   = process.env.YTDLP_BIN || 'yt-dlp';
+const YTDLP_PROXY = process.env.YTDLP_PROXY || '';
+const URL_CACHE   = process.env.URL_CACHE || path.join(__dirname, 'url-cache');
+try { fs.mkdirSync(URL_CACHE, { recursive: true }); } catch {}
 
 // Supported audio formats for server-side scanning and streaming.
 // Web mode decodes files locally in the browser; server mode needs this
@@ -550,6 +564,76 @@ app.post('/api/songs/web-upsert', (req, res) => {
   res.json(result);
 });
 
+
+// ── Add from URL ─────────────────────────────────────────
+// Runs yt-dlp to extract audio from any supported URL, caches it as mp3,
+// and inserts a songs row. Returns the same song shape as web-upsert.
+function runYtdlp(url, outTemplate) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-x', '--audio-format', 'mp3',
+      '--no-playlist', '--no-progress', '--no-warnings',
+      '--no-simulate',
+      '--print', '%(title)s\t%(uploader)s\t%(duration)s\t%(thumbnail)s',
+      '-o', outTemplate,
+    ];
+    if (YTDLP_PROXY) args.push('--proxy', YTDLP_PROXY);
+    args.push(url);
+    const proc = spawn(YTDLP_BIN, args, { timeout: 180000 });
+    let out = '', err = '';
+    proc.stdout.on('data', d => { out += d; });
+    proc.stderr.on('data', d => { err += d; });
+    proc.on('error', e => reject(new Error(`yt-dlp not available: ${e.message}`)));
+    proc.on('close', code => {
+      if (code !== 0) return reject(new Error(err.trim().split('\n').pop() || `yt-dlp exited ${code}`));
+      const line = out.trim().split('\n').filter(Boolean).pop() || '';
+      const [title, uploader, duration, thumbnail] = line.split('\t');
+      resolve({
+        title:     (title && title !== 'NA') ? title : '',
+        artist:    (uploader && uploader !== 'NA') ? uploader : '',
+        duration:  parseFloat(duration) || 0,
+        thumbnail: (thumbnail && thumbnail !== 'NA') ? thumbnail : null,
+      });
+    });
+  });
+}
+
+app.post('/api/songs/from-url', async (req, res) => {
+  const url = ((req.body && req.body.url) || '').trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) {
+    return res.status(400).json({ error: 'Enter a valid http(s) URL' });
+  }
+  try {
+    // Dedupe: if we already have this URL live, hand back the existing song.
+    const existing = db.prepare('SELECT * FROM songs WHERE source_url = ? AND deleted_at IS NULL').get(url);
+    if (existing) {
+      const n = db.prepare('SELECT note_text FROM song_notes WHERE song_id = ?').get(existing.id);
+      return res.json({ ...existing, has_note: (n && n.note_text) ? 1 : 0, reused: true });
+    }
+
+    const key       = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
+    const outTmpl   = path.join(URL_CACHE, `${key}.%(ext)s`);
+    const finalPath = path.join(URL_CACHE, `${key}.mp3`);
+
+    const meta = await runYtdlp(url, outTmpl);
+    if (!fs.existsSync(finalPath)) {
+      return res.status(422).json({ error: 'No audio could be extracted from that URL' });
+    }
+
+    const title = meta.title || url.replace(/^https?:\/\//, '').slice(0, 120);
+    const info = db.prepare(
+      'INSERT INTO songs (filepath, source_url, thumbnail_url, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(finalPath, url, meta.thumbnail, title, meta.artist, '', meta.duration);
+    res.json({
+      id: Number(info.lastInsertRowid), filepath: finalPath, source_url: url, thumbnail_url: meta.thumbnail,
+      title, artist: meta.artist, album: '', duration_sec: meta.duration,
+      created_at: new Date().toISOString(), deleted_at: null, has_note: 0,
+    });
+  } catch (e) {
+    console.error('[AudioNote] from-url error:', e.message);
+    res.status(500).json({ error: e.message || 'Extraction failed' });
+  }
+});
 
 // App version — single source of truth for the UI footer
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));

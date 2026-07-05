@@ -3,6 +3,25 @@
 All notable changes to AudioNote are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-07-04
+
+### Added
+- **Add from a URL.** Paste a YouTube, SoundCloud, Bandcamp, or direct audio
+  link and AudioNote extracts the audio server-side (via `yt-dlp`, transcoded to
+  mp3 with `ffmpeg`) and catalogs it as a normal track — ready to timestamp and
+  note like any file. New `POST /api/songs/from-url` route, a "🔗 Add from URL"
+  control in the sidebar, and a one-click "Try a sample clip" on the home page.
+- `source_url` and `thumbnail_url` columns on `songs` (auto-migrated on existing
+  databases) record a URL track's provenance and poster image. Re-adding the
+  same URL de-dupes to the existing track instead of downloading again.
+- `YTDLP_PROXY` environment variable routes extraction through a proxy
+  (e.g. `socks5://host:port`) for sites that rate-limit a server's IP.
+
+### Requirements
+- The URL feature needs [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and
+  [`ffmpeg`](https://ffmpeg.org) on the server's `PATH`. Everything else works
+  without them; only "Add from URL" is affected if they're missing.
+
 ## [1.2.0] — 2026-06-16
 
 ### Changed

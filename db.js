@@ -39,14 +39,16 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS songs (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    filepath     TEXT UNIQUE NOT NULL,
-    title        TEXT NOT NULL,
-    artist       TEXT DEFAULT '',
-    album        TEXT DEFAULT '',
-    duration_sec REAL DEFAULT 0,
-    created_at   TEXT DEFAULT (datetime('now')),
-    deleted_at   TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    filepath      TEXT UNIQUE NOT NULL,
+    source_url    TEXT,
+    thumbnail_url TEXT,
+    title         TEXT NOT NULL,
+    artist        TEXT DEFAULT '',
+    album         TEXT DEFAULT '',
+    duration_sec  REAL DEFAULT 0,
+    created_at    TEXT DEFAULT (datetime('now')),
+    deleted_at    TEXT
   );
 
   CREATE TABLE IF NOT EXISTS song_notes (
@@ -71,6 +73,9 @@ db.exec(`
 // Each is wrapped: it harmlessly fails (and is ignored) when already applied.
 // Legacy DBs created before deleted_at existed get the column added here.
 try { db.exec('ALTER TABLE songs ADD COLUMN deleted_at TEXT'); } catch {}
+// URL-sourced tracks (Add from URL, v1.3.0) — provenance + poster image.
+try { db.exec('ALTER TABLE songs ADD COLUMN source_url TEXT'); } catch {}
+try { db.exec('ALTER TABLE songs ADD COLUMN thumbnail_url TEXT'); } catch {}
 // One note per song — app upserts assume this; skipped silently if legacy dup rows exist
 try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS song_notes_song_id ON song_notes(song_id)'); } catch {}
 

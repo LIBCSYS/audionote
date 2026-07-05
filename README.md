@@ -36,6 +36,7 @@ It is not a streaming service. It does not sync to the cloud. It does not requir
 | | |
 |---|---|
 | 🎵 **Catalog** | Recursively scans one or more folders for audio files — `.mp3 .m4a .wav .flac .ogg .aac` and more — reads ID3/tag metadata (title, artist, album, duration) |
+| 🔗 **Add from URL** | Paste a YouTube, SoundCloud, or direct audio link — AudioNote extracts the audio server-side (via `yt-dlp`) and catalogs it as a normal track. Requires `yt-dlp` + `ffmpeg` ([see Requirements](#requirements)) |
 | ▶️ **Player** | Full-featured HTML5 audio player — seek, volume, progress bar — right in the browser |
 | ⏱ **Timestamp markers** | Press **Mark** (or hit `M`) while a track plays to pin the exact moment. Add a label after. Click any marker to jump back. |
 | 📝 **Song notes** | Freetext notes per track, auto-saved as you type |
@@ -66,6 +67,7 @@ Requires Chrome or Edge. Safari does not support the File System Access API.
 ### Requirements
 
 - **[Node.js 22.5+](https://nodejs.org)** — uses the built-in `node:sqlite` module, no native compilation required.
+- *(Optional)* **[`yt-dlp`](https://github.com/yt-dlp/yt-dlp)** and **[`ffmpeg`](https://ffmpeg.org)** on your `PATH` — only needed for the **Add from URL** feature. Everything else works without them.
 
 ### Install
 

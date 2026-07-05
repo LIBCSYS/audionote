@@ -110,6 +110,9 @@ async function selectSong(song) {
     if (audio.src && audio.src.startsWith('blob:')) URL.revokeObjectURL(audio.src);
     if (file) {
       audio.src = URL.createObjectURL(file);
+    } else if (song.source_url) {
+      // URL-sourced clip lives on the server — stream it via /audio/:id
+      audio.src = `/audio/${song.id}`;
     } else {
       audio.src = '';
       $('np-meta').textContent = '⚠ File not loaded — click Add Files to reload your folder';
@@ -711,6 +714,73 @@ if (openFileInput) {
       noteStatus.textContent = '';
       break; // play the first selected file
     }
+  });
+}
+
+// ── ADD FROM URL ─────────────────────────────────────────
+const SAMPLE_URL = 'https://www.youtube.com/watch?v=N98wn41rsdw';
+const addUrlBtn = $('add-url-btn');
+const urlPanel  = $('url-panel');
+const urlInput  = $('url-input');
+const urlGoBtn  = $('url-go-btn');
+const urlStatus = $('url-status');
+
+function setUrlStatus(msg, cls) {
+  if (!urlStatus) return;
+  urlStatus.textContent = msg || '';
+  urlStatus.className = 'url-status' + (cls ? ' ' + cls : '');
+}
+
+async function addFromUrl() {
+  const url = (urlInput.value || '').trim();
+  if (!/^https?:\/\/\S+/i.test(url)) { setUrlStatus('Enter a valid http(s) URL', 'err'); return; }
+  urlGoBtn.disabled = true;
+  urlInput.disabled = true;
+  setUrlStatus('⏳ Fetching audio… this can take a moment', 'working');
+  try {
+    const res = await fetch('/api/songs/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const song = await res.json();
+    if (!res.ok) throw new Error(song.error || `HTTP ${res.status}`);
+
+    // Merge into the library (same pattern as Add Files)
+    const i = state.songs.findIndex(s => s.id === song.id);
+    if (i >= 0) state.songs[i] = song; else state.songs.push(song);
+    state.songs.sort((a, b) => (a.artist || '').localeCompare(b.artist || '') || a.title.localeCompare(b.title));
+    applyFilters();
+
+    setUrlStatus(song.reused ? '✓ Already in your library — opening' : `✓ Added: ${song.title}`, 'ok');
+    urlInput.value = '';
+    selectSong(song);
+    setTimeout(() => setUrlStatus('', ''), 4000);
+  } catch (e) {
+    setUrlStatus('✕ ' + e.message, 'err');
+  } finally {
+    urlGoBtn.disabled = false;
+    urlInput.disabled = false;
+  }
+}
+
+if (addUrlBtn) {
+  addUrlBtn.addEventListener('click', () => {
+    const nowHidden = urlPanel.classList.toggle('hidden');
+    if (!nowHidden) urlInput.focus();
+  });
+}
+if (urlGoBtn) urlGoBtn.addEventListener('click', addFromUrl);
+if (urlInput) urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') addFromUrl(); });
+
+// Homepage "Try a sample clip" — prefill and fetch the sample URL
+const trySampleLink = $('try-sample-link');
+if (trySampleLink) {
+  trySampleLink.addEventListener('click', e => {
+    e.preventDefault();
+    if (urlPanel) urlPanel.classList.remove('hidden');
+    urlInput.value = SAMPLE_URL;
+    addFromUrl();
   });
 }
 

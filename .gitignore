@@ -1,4 +1,5 @@
 node_modules/
+url-cache/
 audionote.db
 *.log
 audionote.db-shm
