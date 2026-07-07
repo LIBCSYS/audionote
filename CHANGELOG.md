@@ -3,6 +3,14 @@
 All notable changes to AudioNote are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.3] — 2026-07-05
+
+### Changed
+- **Add from URL no longer blocks on long tracks.** Extraction now runs in the
+  background and the client polls for completion, so a lengthy download (e.g. a
+  1-hour video, especially through a proxy) never holds the request open past a
+  reverse-proxy timeout and leaves the UI spinning. The job cap is 15 minutes.
+
 ## [1.3.2] — 2026-07-05
 
 ### Changed

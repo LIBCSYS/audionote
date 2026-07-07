@@ -731,28 +731,49 @@ function setUrlStatus(msg, cls) {
   urlStatus.className = 'url-status' + (cls ? ' ' + cls : '');
 }
 
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+async function postFromUrl(url) {
+  const res = await fetch('/api/songs/from-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  // Parse defensively — a proxy timeout or error page can return HTML, not JSON.
+  const raw = await res.text();
+  try { return JSON.parse(raw); }
+  catch {
+    throw new Error(res.status >= 500
+      ? 'The server hit an error fetching that link — try a direct audio link (.mp3/.m4a).'
+      : 'Unexpected response from the server. Please try again.');
+  }
+}
+
 async function addFromUrl() {
   const url = (urlInput.value || '').trim();
   if (!/^https?:\/\/\S+/i.test(url)) { setUrlStatus('Enter a valid http(s) URL', 'err'); return; }
   urlGoBtn.disabled = true;
   urlInput.disabled = true;
-  setUrlStatus('⏳ Fetching audio… this can take a moment', 'working');
+  setUrlStatus('⏳ Fetching audio… long tracks can take a minute or two', 'working');
+  const deadline = Date.now() + 12 * 60 * 1000; // give up after 12 minutes
   try {
-    const res = await fetch('/api/songs/from-url', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    });
-    // Parse defensively — a proxy timeout or error page can return HTML, not JSON.
-    const raw = await res.text();
-    let song;
-    try { song = JSON.parse(raw); } catch {
-      throw new Error(res.status >= 500
-        ? 'The server hit an error fetching that link — try a direct audio link (.mp3/.m4a).'
-        : 'Unexpected response from the server. Please try again.');
+    // Extraction runs on the server in the background; poll until the track
+    // lands (or an error / timeout). Each request returns instantly.
+    let song = null;
+    let waited = 0;
+    while (true) {
+      const data = await postFromUrl(url);
+      if (data && data.error) throw new Error(data.error);
+      if (data && data.id) { song = data; break; }
+      if (data && data.status === 'processing') {
+        if (Date.now() > deadline) throw new Error('Still working after several minutes — try a shorter track or a direct audio link.');
+        waited += 3;
+        if (waited >= 12) setUrlStatus(`⏳ Still fetching… (${waited}s) — long tracks take a while`, 'working');
+        await wait(3000);
+        continue;
+      }
+      throw new Error('Could not add that URL.');
     }
-    if (song && song.error) throw new Error(song.error);
-    if (!res.ok || !song || !song.id) throw new Error('Could not add that URL.');
 
     // Merge into the library (same pattern as Add Files)
     const i = state.songs.findIndex(s => s.id === song.id);

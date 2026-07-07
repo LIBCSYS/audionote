@@ -16,7 +16,7 @@ try {
 
 const app        = express();
 const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.3.2';
+const VERSION    = '1.3.3';
 const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
 
 // ── Add from URL (yt-dlp) ────────────────────────────────
@@ -579,7 +579,7 @@ function runYtdlp(url, outTemplate, useProxy) {
     ];
     if (useProxy && YTDLP_PROXY) args.push('--proxy', YTDLP_PROXY);
     args.push(url);
-    const proc = spawn(YTDLP_BIN, args, { timeout: 180000 });
+    const proc = spawn(YTDLP_BIN, args, { timeout: 900000 });
     let out = '', err = '';
     proc.stdout.on('data', d => { out += d; });
     proc.stderr.on('data', d => { err += d; });
@@ -613,50 +613,65 @@ function friendlyYtdlpError(msg) {
   return m.replace(/^ERROR:\s*/i, '').replace(/\s+See\s+https?:\/\/\S+.*$/i, '').slice(0, 240) || 'Extraction failed.';
 }
 
-app.post('/api/songs/from-url', async (req, res) => {
-  const url = ((req.body && req.body.url) || '').trim();
-  if (!/^https?:\/\/\S+$/i.test(url)) {
-    return res.json({ error: 'Enter a valid http(s) URL' });
-  }
+// In-progress extractions, keyed by URL. Extraction runs in the background so a
+// long track (e.g. a 1-hour video) never holds the HTTP request open past a
+// proxy timeout — the client polls this same endpoint and the dedupe check
+// hands back the finished song once it lands.
+const urlJobs = new Map(); // url -> { status:'running'|'error', error?, startedAt }
+
+async function extractToSong(url) {
+  const key       = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
+  const outTmpl   = path.join(URL_CACHE, `${key}.%(ext)s`);
+  const finalPath = path.join(URL_CACHE, `${key}.mp3`);
+  // Try direct first (so direct/most URLs never depend on the proxy), then fall
+  // back to YTDLP_PROXY only if the direct attempt fails.
+  let meta;
   try {
-    // Dedupe: if we already have this URL live, hand back the existing song.
-    const existing = db.prepare('SELECT * FROM songs WHERE source_url = ? AND deleted_at IS NULL').get(url);
-    if (existing) {
-      const n = db.prepare('SELECT note_text FROM song_notes WHERE song_id = ?').get(existing.id);
-      return res.json({ ...existing, has_note: (n && n.note_text) ? 1 : 0, reused: true });
+    meta = await runYtdlp(url, outTmpl, false);
+  } catch (eDirect) {
+    if (!YTDLP_PROXY) throw eDirect;
+    meta = await runYtdlp(url, outTmpl, true);
+  }
+  if (!fs.existsSync(finalPath)) throw new Error('No audio could be extracted from that URL');
+  const title = meta.title || url.replace(/^https?:\/\//, '').slice(0, 120);
+  db.prepare(
+    'INSERT INTO songs (filepath, source_url, thumbnail_url, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(finalPath, url, meta.thumbnail, title, meta.artist, '', meta.duration);
+}
+
+function songForUrl(url) {
+  const s = db.prepare('SELECT * FROM songs WHERE source_url = ? AND deleted_at IS NULL').get(url);
+  if (!s) return null;
+  const n = db.prepare('SELECT note_text FROM song_notes WHERE song_id = ?').get(s.id);
+  return { ...s, has_note: (n && n.note_text) ? 1 : 0 };
+}
+
+app.post('/api/songs/from-url', (req, res) => {
+  const url = ((req.body && req.body.url) || '').trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) return res.json({ error: 'Enter a valid http(s) URL' });
+  try {
+    // Already have it (finished on a previous poll, or added earlier)?
+    const done = songForUrl(url);
+    if (done) return res.json({ ...done, reused: true });
+
+    // A job in flight for this URL?
+    const job = urlJobs.get(url);
+    if (job) {
+      if (job.status === 'error') { urlJobs.delete(url); return res.json({ error: job.error }); }
+      return res.json({ status: 'processing' }); // still running — client keeps polling
     }
 
-    const key       = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
-    const outTmpl   = path.join(URL_CACHE, `${key}.%(ext)s`);
-    const finalPath = path.join(URL_CACHE, `${key}.mp3`);
-
-    // Try direct first (so direct/most URLs never depend on the proxy), then
-    // fall back to YTDLP_PROXY only if the direct attempt fails (e.g. a
-    // datacenter-IP bot-wall). Keeps extraction working even if the proxy is down.
-    let meta;
-    try {
-      meta = await runYtdlp(url, outTmpl, false);
-    } catch (eDirect) {
-      if (!YTDLP_PROXY) throw eDirect;
-      meta = await runYtdlp(url, outTmpl, true);
-    }
-    if (!fs.existsSync(finalPath)) {
-      return res.json({ error: 'No audio could be extracted from that URL' });
-    }
-
-    const title = meta.title || url.replace(/^https?:\/\//, '').slice(0, 120);
-    const info = db.prepare(
-      'INSERT INTO songs (filepath, source_url, thumbnail_url, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(finalPath, url, meta.thumbnail, title, meta.artist, '', meta.duration);
-    res.json({
-      id: Number(info.lastInsertRowid), filepath: finalPath, source_url: url, thumbnail_url: meta.thumbnail,
-      title, artist: meta.artist, album: '', duration_sec: meta.duration,
-      created_at: new Date().toISOString(), deleted_at: null, has_note: 0,
-    });
+    // Start a new background extraction and return immediately.
+    urlJobs.set(url, { status: 'running', startedAt: Date.now() });
+    extractToSong(url)
+      .then(() => { urlJobs.delete(url); }) // next poll's dedupe returns the song
+      .catch(e => {
+        console.error('[AudioNote] from-url error:', e.message);
+        urlJobs.set(url, { status: 'error', error: friendlyYtdlpError(e.message) });
+      });
+    res.json({ status: 'processing' });
   } catch (e) {
-    console.error('[AudioNote] from-url error:', e.message);
-    // 200 + JSON envelope: an expected user-facing failure, not a server fault,
-    // and it survives reverse proxies that swap error responses for HTML pages.
+    console.error('[AudioNote] from-url route error:', e.message);
     res.json({ error: friendlyYtdlpError(e.message) });
   }
 });
