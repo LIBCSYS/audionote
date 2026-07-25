@@ -7,3 +7,7 @@ audionote.db-wal
 demo-music/
 sample-music/
 package-lock.json
+
+# environment (per-deployment, never committed)
+.env
+audionote.db*

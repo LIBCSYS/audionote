@@ -90,3 +90,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 - Open-source release: MIT, web demo, CSV import/export, analytics, timestamp
   markers, song notes, soft delete, rename-on-disk, Ask AudioNote.
+
+## 1.4.0 — 2026-07-25
+
+### Reconciled the public repo and the je9 deployment into one codebase
+
+The public repo (SQLite) and the je9 deployment (MariaDB) had diverged since
+2026-05-25 and were maintained as two forks — the same features were being
+implemented twice, once on each side. This release removes the fork.
+
+- **Engine-agnostic database facade** (`db/`) exposing one async API
+  (`all` / `get` / `run` / `exec`) over either SQLite or MySQL/MariaDB.
+  The engine is chosen with `DB_DRIVER`; the query text is identical for both.
+- **Table prefixing is configuration** (`TABLE_PREFIX`), so the je9 `an_*`
+  tables and the local unprefixed tables are served by the same SQL.
+- **Deployment presentation is configuration** — `WEB_MODE`, `CHAT_ENABLED`,
+  `SITE_BADGE`, `ANALYTICS` and branding move out of forked source into `.env`,
+  and are exposed to the client via `GET /api/config`.
+- **Removed the hardcoded database password fallback.** Credentials now come
+  from env vars or a root-owned secrets file; a missing secret fails at boot
+  instead of silently connecting as the wrong identity.
+- Added `.env.example`; `.env` and local SQLite files are gitignored.
+- Schema DDL is idempotent per dialect and matches the live je9 tables, so
+  startup is a no-op against a populated database.

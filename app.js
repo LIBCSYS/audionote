@@ -5,7 +5,8 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 const { spawn } = require('child_process');
-const db      = require('./db');
+const cfg     = require('./config');
+const db      = require('./db'); // engine-agnostic facade (sqlite | mysql)
 
 let mm;
 try {
@@ -15,21 +16,9 @@ try {
 }
 
 const app        = express();
-const PORT       = process.env.PORT || 2600;
-const VERSION    = '1.3.3';
-const MUSIC_ROOT = process.env.MUSIC_ROOT || path.join(__dirname, '..');
-
-// ── Add from URL (yt-dlp) ────────────────────────────────
-// Any http(s) URL with audio — YouTube, SoundCloud, Bandcamp, a bare .mp3,
-// anything yt-dlp supports — is downloaded/transcoded to mp3 in url-cache/
-// and cataloged as a normal song, so the existing player + notes just work.
-// Requires yt-dlp and ffmpeg on PATH (see README). Optional YTDLP_PROXY routes
-// extraction through a proxy (e.g. socks5://host:port) when a site blocks the
-// server's IP.
-const YTDLP_BIN   = process.env.YTDLP_BIN || 'yt-dlp';
-const YTDLP_PROXY = process.env.YTDLP_PROXY || '';
-const URL_CACHE   = process.env.URL_CACHE || path.join(__dirname, 'url-cache');
-try { fs.mkdirSync(URL_CACHE, { recursive: true }); } catch {}
+const PORT       = cfg.PORT;
+const VERSION    = cfg.VERSION;                    // from package.json — one source of truth
+const MUSIC_ROOT = cfg.MUSIC_ROOT || path.join(__dirname, '..');
 
 // Supported audio formats for server-side scanning and streaming.
 // Web mode decodes files locally in the browser; server mode needs this
@@ -47,26 +36,29 @@ const MIME_BY_EXT = {
   '.aif': 'audio/aiff',  '.aiff': 'audio/aiff',
 };
 
+// ── URL ingestion (yt-dlp) ───────────────────────────────
+// Any http(s) URL with audio — YouTube, SoundCloud, Bandcamp, a bare .mp3,
+// anything yt-dlp supports — is downloaded/transcoded to mp3 in url-cache/
+// and catalogued as a normal song, so the existing player + notes just work.
+const YTDLP_BIN   = process.env.YTDLP_BIN || '/usr/local/bin/yt-dlp';
+const YTDLP_PROXY = process.env.YTDLP_PROXY || '';  // e.g. socks5://127.0.0.1:1080 (Tailscale->trixie) to dodge datacenter-IP bot-walls
+const URL_CACHE   = process.env.URL_CACHE || path.join(__dirname, 'url-cache');
+try { fs.mkdirSync(URL_CACHE, { recursive: true }); } catch {}
+
 app.use(express.json({ limit: '10mb' }));
 
-// Traffic logging — must be before static so every hit is captured
-const insertVisit = db.prepare(
-  'INSERT INTO visits (method, path, status, ip, referrer, ua, ms) VALUES (?, ?, ?, ?, ?, ?, ?)'
-);
+// Traffic logging
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
-    try {
-      insertVisit.run(
-        req.method,
-        req.path,
-        res.statusCode,
-        req.headers['x-forwarded-for'] || req.ip || '',
-        req.headers['referer'] || req.headers['referrer'] || '',
-        req.headers['user-agent'] || '',
-        Date.now() - start
-      );
-    } catch {}
+    db.run(
+      'INSERT INTO an_visits (method, path, status, ip, referrer, ua, ms) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [req.method, req.path, res.statusCode,
+       req.headers['x-forwarded-for'] || req.ip || '',
+       req.headers['referer'] || req.headers['referrer'] || '',
+       req.headers['user-agent'] || '',
+       Date.now() - start]
+    ).catch(() => {});
   });
   next();
 });
@@ -89,7 +81,6 @@ function scanDir(dir, results = []) {
   return results;
 }
 
-// List available drives (C: through Z:, checks existence)
 app.get('/api/drives', (req, res) => {
   const drives = [];
   for (let i = 67; i <= 90; i++) {
@@ -101,53 +92,54 @@ app.get('/api/drives', (req, res) => {
 
 // ── SCAN DIRECTORIES ──────────────────────────────────────
 
-app.get('/api/scan-dirs', (req, res) => {
-  res.json(db.prepare('SELECT * FROM scan_dirs ORDER BY created_at').all());
+app.get('/api/scan-dirs', async (req, res) => {
+  try {
+    const rows = await db.all('SELECT * FROM an_scan_dirs ORDER BY created_at');
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/scan-dirs', (req, res) => {
+app.post('/api/scan-dirs', async (req, res) => {
   const { dirpath, label } = req.body;
   if (!dirpath) return res.status(400).json({ error: 'dirpath required' });
   const normalizedPath = path.normalize(dirpath.trim());
   if (!fs.existsSync(normalizedPath)) return res.status(400).json({ error: `Directory not found: ${normalizedPath}` });
   try {
-    const result = db.prepare('INSERT INTO scan_dirs (dirpath, label) VALUES (?, ?)').run(normalizedPath, label || '');
-    res.json(db.prepare('SELECT * FROM scan_dirs WHERE id = ?').get(result.lastInsertRowid));
-  } catch {
-    res.status(409).json({ error: 'Directory already added' });
-  }
+    const existing = await db.get('SELECT id FROM an_scan_dirs WHERE dirpath = ?', [normalizedPath]);
+    if (existing) return res.status(409).json({ error: 'Directory already added' });
+    const result = await db.run('INSERT INTO an_scan_dirs (dirpath, label) VALUES (?, ?)', [normalizedPath, label || '']);
+    const row = await db.get('SELECT * FROM an_scan_dirs WHERE id = ?', [result.insertId]);
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.delete('/api/scan-dirs/:id', (req, res) => {
-  db.prepare('DELETE FROM scan_dirs WHERE id = ?').run(req.params.id);
-  res.json({ ok: true });
+app.delete('/api/scan-dirs/:id', async (req, res) => {
+  try {
+    await db.run('DELETE FROM an_scan_dirs WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const SONGS_QUERY = `
   SELECT s.*,
     CASE WHEN sn.note_text IS NOT NULL AND sn.note_text != '' THEN 1 ELSE 0 END AS has_note
-  FROM songs s
-  LEFT JOIN song_notes sn ON sn.song_id = s.id
+  FROM an_songs s
+  LEFT JOIN an_song_notes sn ON sn.song_id = s.id
   WHERE s.deleted_at IS NULL
   ORDER BY s.artist, s.title
 `;
 
-// Rescan all configured directories (falls back to parent dir if none configured)
 app.post('/api/rescan', async (req, res) => {
   try {
-    const configuredDirs = db.prepare('SELECT dirpath FROM scan_dirs').all().map(r => r.dirpath);
+    const dirRows = await db.all('SELECT dirpath FROM an_scan_dirs');
+    const configuredDirs = dirRows.map(r => r.dirpath);
     const dirsToScan = configuredDirs.length ? configuredDirs : [MUSIC_ROOT];
     const files = [];
     for (const dir of dirsToScan) scanDir(dir, files);
-    const insert = db.prepare(
-      'INSERT OR IGNORE INTO songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)'
-    );
-    const restore = db.prepare(
-      "UPDATE songs SET deleted_at = NULL, title=?, artist=?, album=?, duration_sec=? WHERE id=?"
-    );
+
     let added = 0;
     for (const fp of files) {
-      const existing = db.prepare('SELECT id, deleted_at FROM songs WHERE filepath = ?').get(fp);
+      const existing = await db.get('SELECT id, deleted_at FROM an_songs WHERE filepath = ?', [fp]);
       let title = path.basename(fp, path.extname(fp));
       let artist = '', album = '', duration_sec = 0;
       if (mm) {
@@ -160,21 +152,27 @@ app.post('/api/rescan', async (req, res) => {
         } catch {}
       }
       if (!existing) {
-        insert.run(fp, title, artist, album, duration_sec);
+        await db.run(
+          'INSERT IGNORE INTO an_songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)',
+          [fp, title, artist, album, duration_sec]
+        );
         added++;
       } else if (existing.deleted_at) {
-        // File is back on disk — restore it
-        restore.run(title, artist, album, duration_sec, existing.id);
+        await db.run(
+          'UPDATE an_songs SET deleted_at = NULL, title=?, artist=?, album=?, duration_sec=? WHERE id=?',
+          [title, artist, album, duration_sec, existing.id]
+        );
         added++;
       }
     }
-    // Soft-delete entries whose files no longer exist on disk
-    const allSongs = db.prepare('SELECT id, filepath FROM songs WHERE deleted_at IS NULL').all();
-    const removed  = allSongs.filter(s => !fs.existsSync(s.filepath));
-    const softDel  = db.prepare("UPDATE songs SET deleted_at = datetime('now') WHERE id = ?");
-    for (const s of removed) softDel.run(s.id);
 
-    const songs = db.prepare(SONGS_QUERY).all();
+    const allSongs = await db.all('SELECT id, filepath FROM an_songs WHERE deleted_at IS NULL');
+    const removed = allSongs.filter(s => !fs.existsSync(s.filepath));
+    for (const s of removed) {
+      await db.run('UPDATE an_songs SET deleted_at = NOW() WHERE id = ?', [s.id]);
+    }
+
+    const songs = await db.run(SONGS_QUERY);
     res.json({ added, removed: removed.length, total: songs.length, songs });
   } catch (err) {
     console.error('[rescan error]', err);
@@ -182,80 +180,89 @@ app.post('/api/rescan', async (req, res) => {
   }
 });
 
-app.get('/api/songs', (req, res) => {
-  res.json(db.prepare(SONGS_QUERY).all());
+app.get('/api/songs', async (req, res) => {
+  try {
+    const rows = await db.all(SONGS_QUERY);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/songs/:id/notes', (req, res) => {
-  const note = db.prepare('SELECT * FROM song_notes WHERE song_id = ?').get(req.params.id);
-  res.json(note || { note_text: '' });
+app.get('/api/songs/:id/notes', async (req, res) => {
+  try {
+    const note = await db.get('SELECT * FROM an_song_notes WHERE song_id = ?', [req.params.id]);
+    res.json(note || { note_text: '' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/songs/:id/notes', (req, res) => {
-  const { note_text } = req.body;
-  const exists = db.prepare('SELECT id FROM song_notes WHERE song_id = ?').get(req.params.id);
-  if (exists) {
-    db.prepare("UPDATE song_notes SET note_text = ?, updated_at = datetime('now') WHERE song_id = ?")
-      .run(note_text, req.params.id);
-  } else {
-    db.prepare('INSERT INTO song_notes (song_id, note_text) VALUES (?, ?)').run(req.params.id, note_text);
-  }
-  res.json({ ok: true });
+app.post('/api/songs/:id/notes', async (req, res) => {
+  try {
+    const { note_text } = req.body;
+    const exists = await db.get('SELECT id FROM an_song_notes WHERE song_id = ?', [req.params.id]);
+    if (exists) {
+      await db.run('UPDATE an_song_notes SET note_text = ? WHERE song_id = ?', [note_text, req.params.id]);
+    } else {
+      await db.run('INSERT INTO an_song_notes (song_id, note_text) VALUES (?, ?)', [req.params.id, note_text]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/songs/:id/timestamps', (req, res) => {
-  res.json(db.prepare('SELECT * FROM timestamps WHERE song_id = ? ORDER BY time_seconds').all(req.params.id));
+app.get('/api/songs/:id/timestamps', async (req, res) => {
+  try {
+    const rows = await db.all('SELECT * FROM an_timestamps WHERE song_id = ? ORDER BY time_seconds', [req.params.id]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/songs/:id/timestamps', (req, res) => {
-  const { time_seconds, label = '', category = '' } = req.body;
-  if (typeof time_seconds !== 'number' || !isFinite(time_seconds) || time_seconds < 0) {
-    return res.status(400).json({ error: 'time_seconds must be a non-negative number' });
-  }
-  const result = db.prepare(
-    'INSERT INTO timestamps (song_id, time_seconds, label, category) VALUES (?, ?, ?, ?)'
-  ).run(req.params.id, time_seconds, label, category);
-  res.json(db.prepare('SELECT * FROM timestamps WHERE id = ?').get(result.lastInsertRowid));
+app.post('/api/songs/:id/timestamps', async (req, res) => {
+  try {
+    const { time_seconds, label = '', category = '' } = req.body;
+    if (typeof time_seconds !== 'number' || !isFinite(time_seconds) || time_seconds < 0) {
+      return res.status(400).json({ error: 'time_seconds must be a non-negative number' });
+    }
+    const result = await db.run(
+      'INSERT INTO an_timestamps (song_id, time_seconds, label, category) VALUES (?, ?, ?, ?)',
+      [req.params.id, time_seconds, label, category]
+    );
+    const row = await db.get('SELECT * FROM an_timestamps WHERE id = ?', [result.insertId]);
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Soft-delete a song (record + notes + timestamps preserved, file untouched)
-app.delete('/api/songs/:id', (req, res) => {
-  db.prepare("UPDATE songs SET deleted_at = datetime('now') WHERE id = ?").run(req.params.id);
-  res.json({ ok: true });
+app.delete('/api/songs/:id', async (req, res) => {
+  try {
+    await db.run('UPDATE an_songs SET deleted_at = NOW() WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Rename file on disk and update DB
-app.patch('/api/songs/:id/rename', (req, res) => {
+app.patch('/api/songs/:id/rename', async (req, res) => {
   const { newName } = req.body;
   if (!newName || !newName.trim()) return res.status(400).json({ error: 'Name required' });
 
-  const song = db.prepare('SELECT * FROM songs WHERE id = ?').get(req.params.id);
-  if (!song) return res.status(404).json({ error: 'Song not found' });
-  if (song.filepath.startsWith('web:')) return res.status(400).json({ error: 'Cannot rename a browser-local file from the server' });
-
-  // Strip characters illegal in Windows/Mac filenames
-  const safeName = newName.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim();
-  if (!safeName) return res.status(400).json({ error: 'Invalid filename' });
-
-  const dir     = path.dirname(song.filepath);
-  const ext     = path.extname(song.filepath);
-  const newPath = path.join(dir, safeName + ext);
-
-  if (newPath !== song.filepath && fs.existsSync(newPath)) {
-    return res.status(409).json({ error: 'A file with that name already exists' });
-  }
   try {
+    const song = await db.get('SELECT * FROM an_songs WHERE id = ?', [req.params.id]);
+    if (!song) return res.status(404).json({ error: 'Song not found' });
+    if (song.filepath.startsWith('web:')) return res.status(400).json({ error: 'Cannot rename a browser-local file from the server' });
+
+    const safeName = newName.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '').trim();
+    if (!safeName) return res.status(400).json({ error: 'Invalid filename' });
+
+    const dir     = path.dirname(song.filepath);
+    const ext     = path.extname(song.filepath);
+    const newPath = path.join(dir, safeName + ext);
+
+    if (newPath !== song.filepath && fs.existsSync(newPath)) {
+      return res.status(409).json({ error: 'A file with that name already exists' });
+    }
     if (newPath !== song.filepath) fs.renameSync(song.filepath, newPath);
-    db.prepare('UPDATE songs SET filepath = ?, title = ? WHERE id = ?').run(newPath, safeName, req.params.id);
+    await db.run('UPDATE an_songs SET filepath = ?, title = ? WHERE id = ?', [newPath, safeName, req.params.id]);
     res.json({ ok: true, filepath: newPath, title: safeName });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── CSV IMPORT ────────────────────────────────────────────
 
-// RFC 4180 compliant parser — handles BOM, CRLF/LF, quoted fields, escaped quotes
 function parseCSV(text) {
   if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const rows = [];
@@ -278,8 +285,6 @@ function parseCSV(text) {
   return rows.filter(r => r.some(f => f.trim()));
 }
 
-// Industry-standard column name aliases (case-insensitive)
-// Covers: AudioNote own format, iTunes, Spotify/Exportify, Last.fm, foobar2000, MusicBee, beets
 const COL_ALIASES = {
   filepath:      ['filepath','file_path','path','location','file location','file','track location'],
   title:         ['title','name','track','track name','song','song name','song title','track title'],
@@ -304,7 +309,6 @@ function mapHeaders(headers) {
   return map;
 }
 
-// Parse mm:ss or h:mm:ss → seconds
 function parseTimeFmt(str) {
   if (!str || !str.trim()) return null;
   const parts = str.trim().split(':').map(p => parseFloat(p) || 0);
@@ -313,7 +317,7 @@ function parseTimeFmt(str) {
   return null;
 }
 
-app.post('/api/import/csv', (req, res) => {
+app.post('/api/import/csv', async (req, res) => {
   const { csv } = req.body;
   if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'csv string required' });
 
@@ -325,8 +329,7 @@ app.post('/api/import/csv', (req, res) => {
   const col     = mapHeaders(headers);
   const get     = (row, key) => col[key] !== undefined ? (row[col[key]] || '').trim() : '';
 
-  // Group data rows by song key: filepath > (title|||artist)
-  const songMap = new Map(); // key → { meta, rows[] }
+  const songMap = new Map();
   for (const row of rows.slice(1)) {
     const fp    = get(row, 'filepath');
     const title = get(row, 'title');
@@ -348,226 +351,230 @@ app.post('/api/import/csv', (req, res) => {
 
   let songs_added = 0, songs_updated = 0, notes_set = 0, timestamps_added = 0, skipped = 0;
 
-  const upsertSong = db.prepare(
-    'INSERT OR IGNORE INTO songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)'
-  );
-  const updateSong = db.prepare(
-    'UPDATE songs SET title=?, artist=?, album=?, duration_sec=?, deleted_at=NULL WHERE filepath=?'
-  );
-  const getNote    = db.prepare('SELECT id FROM song_notes WHERE song_id = ?');
-  const insertNote = db.prepare('INSERT INTO song_notes (song_id, note_text) VALUES (?, ?)');
-  const updateNote = db.prepare("UPDATE song_notes SET note_text = ?, updated_at = datetime('now') WHERE song_id = ?");
-  const hasTs = db.prepare(
-    'SELECT id FROM timestamps WHERE song_id=? AND ABS(time_seconds - ?) < 0.5'
-  );
-  const insertTs = db.prepare(
-    'INSERT INTO timestamps (song_id, time_seconds, label, category) VALUES (?, ?, ?, ?)'
-  );
+  try {
+    for (const [, song] of songMap) {
+      const fp = song.filepath || `import:${song.title}`;
 
-  for (const [, song] of songMap) {
-    const fp = song.filepath || `import:${song.title}`;
-
-    const info = upsertSong.run(fp, song.title, song.artist, song.album, song.duration_sec);
-    if (info.changes > 0) {
-      songs_added++;
-    } else {
-      updateSong.run(song.title, song.artist, song.album, song.duration_sec, fp);
-      songs_updated++;
-    }
-
-    const dbSong = db.prepare('SELECT id FROM songs WHERE filepath=?').get(fp);
-    if (!dbSong) { skipped++; continue; }
-    const songId = dbSong.id;
-
-    // Collect best note text from any row in this song group
-    const noteText = song.rows.map(r => get(r, 'note_text')).find(n => n) || '';
-    if (noteText) {
-      if (getNote.get(songId)) updateNote.run(noteText, songId);
-      else insertNote.run(songId, noteText);
-      notes_set++;
-    }
-
-    // Timestamps — one per row if time data present
-    for (const row of song.rows) {
-      let secs = parseFloat(get(row, 'time_seconds'));
-      if (isNaN(secs) || secs === 0) {
-        const parsed = parseTimeFmt(get(row, 'time_formatted'));
-        if (parsed !== null) secs = parsed;
-        else continue;
+      const info = await db.run(
+        'INSERT IGNORE INTO an_songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)',
+        [fp, song.title, song.artist, song.album, song.duration_sec]
+      );
+      if (info.affectedRows > 0) {
+        songs_added++;
+      } else {
+        await db.run(
+          'UPDATE an_songs SET title=?, artist=?, album=?, duration_sec=?, deleted_at=NULL WHERE filepath=?',
+          [song.title, song.artist, song.album, song.duration_sec, fp]
+        );
+        songs_updated++;
       }
-      if (!hasTs.get(songId, secs)) {
-        insertTs.run(songId, secs, get(row, 'label'), get(row, 'category'));
-        timestamps_added++;
+
+      const dbSong = await db.get('SELECT id FROM an_songs WHERE filepath=?', [fp]);
+      if (!dbSong) { skipped++; continue; }
+      const songId = dbSong.id;
+
+      const noteText = song.rows.map(r => get(r, 'note_text')).find(n => n) || '';
+      if (noteText) {
+        const noteExists = await db.get('SELECT id FROM an_song_notes WHERE song_id = ?', [songId]);
+        if (noteExists) {
+          await db.run('UPDATE an_song_notes SET note_text = ? WHERE song_id = ?', [noteText, songId]);
+        } else {
+          await db.run('INSERT INTO an_song_notes (song_id, note_text) VALUES (?, ?)', [songId, noteText]);
+        }
+        notes_set++;
+      }
+
+      for (const row of song.rows) {
+        let secs = parseFloat(get(row, 'time_seconds'));
+        if (isNaN(secs) || secs === 0) {
+          const parsed = parseTimeFmt(get(row, 'time_formatted'));
+          if (parsed !== null) secs = parsed;
+          else continue;
+        }
+        const hasTs = await db.get(
+          'SELECT id FROM an_timestamps WHERE song_id=? AND ABS(time_seconds - ?) < 0.5',
+          [songId, secs]
+        );
+        if (!hasTs) {
+          await db.run(
+            'INSERT INTO an_timestamps (song_id, time_seconds, label, category) VALUES (?, ?, ?, ?)',
+            [songId, secs, get(row, 'label'), get(row, 'category')]
+          );
+          timestamps_added++;
+        }
       }
     }
-  }
+  } catch (e) { return res.status(500).json({ error: e.message }); }
 
-  const total = db.prepare("SELECT COUNT(*) AS n FROM songs WHERE deleted_at IS NULL").get().n;
+  const { n: total } = await db.get('SELECT COUNT(*) AS n FROM an_songs WHERE deleted_at IS NULL');
   res.json({ songs_added, songs_updated, notes_set, timestamps_added, skipped, total, columns_detected: Object.keys(col) });
 });
 
-// CSV export — flat denormalized, one row per timestamp (songs with no timestamps get one row)
-app.get('/api/export/csv', (req, res) => {
-  const rows = db.prepare(`
-    SELECT
-      s.id            AS song_id,
-      s.title, s.artist, s.album,
-      s.duration_sec,
-      s.filepath,
-      s.created_at    AS cataloged_at,
-      sn.note_text,
-      sn.updated_at   AS note_updated_at,
-      ts.id           AS timestamp_id,
-      ts.time_seconds,
-      ts.label,
-      ts.category,
-      ts.created_at   AS marked_at
-    FROM songs s
-    LEFT JOIN song_notes sn ON sn.song_id = s.id AND sn.note_text != ''
-    LEFT JOIN timestamps  ts ON ts.song_id = s.id
-    ORDER BY s.artist, s.title, ts.time_seconds
-  `).all();
+// CSV export
+app.get('/api/export/csv', async (req, res) => {
+  try {
+    const rows = await db.all(`
+      SELECT
+        s.id            AS song_id,
+        s.title, s.artist, s.album,
+        s.duration_sec,
+        s.filepath,
+        s.created_at    AS cataloged_at,
+        sn.note_text,
+        sn.updated_at   AS note_updated_at,
+        ts.id           AS timestamp_id,
+        ts.time_seconds,
+        ts.label,
+        ts.category,
+        ts.created_at   AS marked_at
+      FROM an_songs s
+      LEFT JOIN an_song_notes sn ON sn.song_id = s.id AND sn.note_text != ''
+      LEFT JOIN an_timestamps  ts ON ts.song_id = s.id
+      ORDER BY s.artist, s.title, ts.time_seconds
+    `);
 
-  const fmtTime = s => {
-    if (s === null || s === undefined) return '';
-    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  };
+    const fmtTime = s => {
+      if (s === null || s === undefined) return '';
+      return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    };
+    const cell = v => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+        ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
 
-  const cell = v => {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
-      ? '"' + s.replace(/"/g, '""') + '"'
-      : s;
-  };
+    const headers = [
+      'song_id','title','artist','album',
+      'duration_sec','duration_formatted',
+      'filepath','note','note_updated_at',
+      'timestamp_id','time_seconds','time_formatted',
+      'label','category','marked_at','cataloged_at'
+    ];
+    const lines = [headers.join(',')];
+    for (const r of rows) {
+      lines.push([
+        r.song_id, cell(r.title), cell(r.artist), cell(r.album),
+        r.duration_sec ?? '', fmtTime(r.duration_sec),
+        cell(r.filepath), cell(r.note_text ?? ''), r.note_updated_at ?? '',
+        r.timestamp_id ?? '', r.time_seconds ?? '', fmtTime(r.time_seconds),
+        cell(r.label ?? ''), cell(r.category ?? ''), r.marked_at ?? '', r.cataloged_at
+      ].join(','));
+    }
 
-  const headers = [
-    'song_id','title','artist','album',
-    'duration_sec','duration_formatted',
-    'filepath','note','note_updated_at',
-    'timestamp_id','time_seconds','time_formatted',
-    'label','category','marked_at','cataloged_at'
-  ];
-
-  const lines = [headers.join(',')];
-  for (const r of rows) {
-    lines.push([
-      r.song_id,
-      cell(r.title),   cell(r.artist),  cell(r.album),
-      r.duration_sec ?? '', fmtTime(r.duration_sec),
-      cell(r.filepath), cell(r.note_text ?? ''), r.note_updated_at ?? '',
-      r.timestamp_id ?? '', r.time_seconds ?? '', fmtTime(r.time_seconds),
-      cell(r.label ?? ''), cell(r.category ?? ''), r.marked_at ?? '',
-      r.cataloged_at
-    ].join(','));
-  }
-
-  const csv = lines.join('\r\n') + '\r\n';
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename="audionote-export.csv"');
-  res.send('﻿' + csv); // BOM so Excel auto-detects UTF-8
+    const csv = lines.join('\r\n') + '\r\n';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="audionote-export.csv"');
+    res.send('﻿' + csv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── ANALYTICS ────────────────────────────────────────────
 
-app.get('/api/analytics', (req, res) => {
-  const total    = db.prepare("SELECT COUNT(*) AS n FROM visits").get().n;
-  const today    = db.prepare("SELECT COUNT(*) AS n FROM visits WHERE ts >= date('now')").get().n;
-  const week     = db.prepare("SELECT COUNT(*) AS n FROM visits WHERE ts >= date('now','-7 days')").get().n;
-  const avgMs    = db.prepare("SELECT ROUND(AVG(ms),1) AS n FROM visits WHERE ts >= date('now','-7 days')").get().n;
-  const uniqIPs  = db.prepare("SELECT COUNT(DISTINCT ip) AS n FROM visits WHERE ip != ''").get().n;
-  const topPaths = db.prepare(
-    "SELECT path, COUNT(*) AS hits FROM visits GROUP BY path ORDER BY hits DESC LIMIT 15"
-  ).all();
-  const recent   = db.prepare(
-    "SELECT ts, method, path, status, ip, ms FROM visits ORDER BY id DESC LIMIT 50"
-  ).all();
-  const byDay    = db.prepare(
-    "SELECT date(ts) AS day, COUNT(*) AS hits FROM visits WHERE ts >= date('now','-29 days') GROUP BY day ORDER BY day"
-  ).all();
-  res.json({ total, today, week, avgMs, uniqIPs, topPaths, recent, byDay });
+app.get('/api/analytics', async (req, res) => {
+  try {
+    const { total } = await db.get('SELECT COUNT(*) AS total FROM an_visits');
+    const { today } = await db.get('SELECT COUNT(*) AS today FROM an_visits WHERE DATE(ts) = CURDATE()');
+    const { week } = await db.get('SELECT COUNT(*) AS week FROM an_visits WHERE ts >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)');
+    const { avgMs } = await db.get('SELECT ROUND(AVG(ms),1) AS avgMs FROM an_visits WHERE ts >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)');
+    const { uniqIPs } = await db.get("SELECT COUNT(DISTINCT ip) AS uniqIPs FROM an_visits WHERE ip != ''");
+    const topPaths = await db.all('SELECT path, COUNT(*) AS hits FROM an_visits GROUP BY path ORDER BY hits DESC LIMIT 15');
+    const recent = await db.all('SELECT ts, method, path, status, ip, ms FROM an_visits ORDER BY id DESC LIMIT 50');
+    const byDay = await db.all("SELECT DATE(ts) AS day, COUNT(*) AS hits FROM an_visits WHERE ts >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) GROUP BY day ORDER BY day");
+    res.json({ total, today, week, avgMs, uniqIPs, topPaths, recent, byDay });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.patch('/api/timestamps/:id', (req, res) => {
-  const { label = '', category = '' } = req.body;
-  db.prepare('UPDATE timestamps SET label = ?, category = ? WHERE id = ?').run(label, category, req.params.id);
-  res.json({ ok: true });
+app.patch('/api/timestamps/:id', async (req, res) => {
+  try {
+    const { label = '', category = '' } = req.body;
+    await db.run('UPDATE an_timestamps SET label = ?, category = ? WHERE id = ?', [label, category, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.delete('/api/timestamps/:id', (req, res) => {
-  db.prepare('DELETE FROM timestamps WHERE id = ?').run(req.params.id);
-  res.json({ ok: true });
+app.delete('/api/timestamps/:id', async (req, res) => {
+  try {
+    await db.run('DELETE FROM an_timestamps WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Stream audio with range support (required for seeking)
-app.get('/audio/:id', (req, res) => {
-  const song = db.prepare('SELECT filepath FROM songs WHERE id = ?').get(req.params.id);
-  if (!song || !fs.existsSync(song.filepath)) return res.status(404).send('Not found');
+// Stream audio with range support
+app.get('/audio/:id', async (req, res) => {
+  try {
+    const song = await db.get('SELECT filepath FROM an_songs WHERE id = ?', [req.params.id]);
+    if (!song || !fs.existsSync(song.filepath)) return res.status(404).send('Not found');
 
-  const stat     = fs.statSync(song.filepath);
-  const fileSize = stat.size;
-  const ctype    = MIME_BY_EXT[path.extname(song.filepath).toLowerCase()] || 'audio/mpeg';
-  const range    = req.headers.range;
+    const stat     = fs.statSync(song.filepath);
+    const fileSize = stat.size;
+    const ctype    = MIME_BY_EXT[path.extname(song.filepath).toLowerCase()] || 'audio/mpeg';
+    const range    = req.headers.range;
 
-  if (range) {
-    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
-    // Suffix range (bytes=-N) means "last N bytes"
-    let start = m && m[1] !== '' ? parseInt(m[1], 10)
-              : m && m[2] !== '' ? Math.max(0, fileSize - parseInt(m[2], 10))
-              : NaN;
-    let end   = m && m[1] !== '' && m[2] !== '' ? parseInt(m[2], 10) : fileSize - 1;
-    if (isNaN(start) || start >= fileSize || start > end) {
-      return res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` }).end();
+    if (range) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+      // Suffix range (bytes=-N) means "last N bytes"
+      let start = m && m[1] !== '' ? parseInt(m[1], 10)
+                : m && m[2] !== '' ? Math.max(0, fileSize - parseInt(m[2], 10))
+                : NaN;
+      let end   = m && m[1] !== '' && m[2] !== '' ? parseInt(m[2], 10) : fileSize - 1;
+      if (isNaN(start) || start >= fileSize || start > end) {
+        return res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` }).end();
+      }
+      end = Math.min(end, fileSize - 1);
+      res.writeHead(206, {
+        'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges':  'bytes',
+        'Content-Length': end - start + 1,
+        'Content-Type':   ctype,
+      });
+      fs.createReadStream(song.filepath, { start, end }).pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type':   ctype,
+        'Accept-Ranges':  'bytes',
+      });
+      fs.createReadStream(song.filepath).pipe(res);
     }
-    end = Math.min(end, fileSize - 1);
-    res.writeHead(206, {
-      'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges':  'bytes',
-      'Content-Length': end - start + 1,
-      'Content-Type':   ctype,
-    });
-    fs.createReadStream(song.filepath, { start, end }).pipe(res);
-  } else {
-    res.writeHead(200, {
-      'Content-Length': fileSize,
-      'Content-Type':   ctype,
-      'Accept-Ranges':  'bytes',
-    });
-    fs.createReadStream(song.filepath).pipe(res);
-  }
+  } catch (e) { res.status(500).send('Error'); }
 });
 
-// Web mode: upsert songs by filepath (no server filesystem access)
-app.post('/api/songs/web-upsert', (req, res) => {
+// Web mode upsert
+app.post('/api/songs/web-upsert', async (req, res) => {
   const songs = req.body;
   if (!Array.isArray(songs)) return res.status(400).json({ error: 'expected array' });
   const result = [];
-  for (const s of songs) {
-    if (!s.filepath) continue;
-    const existing = db.prepare('SELECT * FROM songs WHERE filepath = ?').get(s.filepath);
-    if (existing) {
-      db.prepare('UPDATE songs SET title=?, artist=?, album=?, duration_sec=?, deleted_at=NULL WHERE id=?')
-        .run(s.title || existing.title, s.artist || '', s.album || '', s.duration_sec || 0, existing.id);
-      result.push({ ...existing, title: s.title || existing.title, artist: s.artist || '', album: s.album || '', duration_sec: s.duration_sec || 0, deleted_at: null, has_note: 0 });
-    } else {
-      const info = db.prepare('INSERT INTO songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)')
-        .run(s.filepath, s.title || 'Unknown', s.artist || '', s.album || '', s.duration_sec || 0);
-      result.push({ id: Number(info.lastInsertRowid), filepath: s.filepath, title: s.title || 'Unknown', artist: s.artist || '', album: s.album || '', duration_sec: s.duration_sec || 0, created_at: new Date().toISOString(), deleted_at: null, has_note: 0 });
+  try {
+    for (const s of songs) {
+      if (!s.filepath) continue;
+      const existing = await db.get('SELECT * FROM an_songs WHERE filepath = ?', [s.filepath]);
+      if (existing) {
+        await db.run(
+          'UPDATE an_songs SET title=?, artist=?, album=?, duration_sec=?, deleted_at=NULL WHERE id=?',
+          [s.title || existing.title, s.artist || '', s.album || '', s.duration_sec || 0, existing.id]
+        );
+        result.push({ ...existing, title: s.title || existing.title, artist: s.artist || '', album: s.album || '', duration_sec: s.duration_sec || 0, deleted_at: null, has_note: 0 });
+      } else {
+        const info = await db.run(
+          'INSERT INTO an_songs (filepath, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?)',
+          [s.filepath, s.title || 'Unknown', s.artist || '', s.album || '', s.duration_sec || 0]
+        );
+        result.push({ id: info.insertId, filepath: s.filepath, title: s.title || 'Unknown', artist: s.artist || '', album: s.album || '', duration_sec: s.duration_sec || 0, created_at: new Date().toISOString(), deleted_at: null, has_note: 0 });
+      }
     }
-  }
-  // Refresh has_note for returned songs
-  for (const r of result) {
-    const n = db.prepare("SELECT note_text FROM song_notes WHERE song_id = ?").get(r.id);
-    r.has_note = (n && n.note_text) ? 1 : 0;
-  }
-  result.sort((a, b) => (a.artist || '').localeCompare(b.artist || '') || a.title.localeCompare(b.title));
-  res.json(result);
+    for (const r of result) {
+      const n = await db.get('SELECT note_text FROM an_song_notes WHERE song_id = ?', [r.id]);
+      r.has_note = (n && n.note_text) ? 1 : 0;
+    }
+    result.sort((a, b) => (a.artist || '').localeCompare(b.artist || '') || a.title.localeCompare(b.title));
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
 
 // ── Add from URL ─────────────────────────────────────────
 // Runs yt-dlp to extract audio from any supported URL, caches it as mp3,
-// and inserts a songs row. Returns the same song shape as web-upsert.
+// and inserts an an_songs row. Returns the same song shape as web-upsert.
 function runYtdlp(url, outTemplate, useProxy) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -583,7 +590,7 @@ function runYtdlp(url, outTemplate, useProxy) {
     let out = '', err = '';
     proc.stdout.on('data', d => { out += d; });
     proc.stderr.on('data', d => { err += d; });
-    proc.on('error', e => reject(new Error(`yt-dlp not available: ${e.message}`)));
+    proc.on('error', e => reject(new Error(`yt-dlp failed to start: ${e.message}`)));
     proc.on('close', code => {
       if (code !== 0) return reject(new Error(err.trim().split('\n').pop() || `yt-dlp exited ${code}`));
       const line = out.trim().split('\n').filter(Boolean).pop() || '';
@@ -599,11 +606,11 @@ function runYtdlp(url, outTemplate, useProxy) {
 }
 
 // Turn raw yt-dlp failures into a short, human message. Returned with HTTP 200
-// so a reverse proxy's HTML error pages can't replace the JSON body.
+// (see below) so the reverse proxy's HTML error pages never replace the JSON.
 function friendlyYtdlpError(msg) {
   const m = String(msg || '');
   if (/sign in to confirm|not a bot|cookies/i.test(m))
-    return 'That site blocked the request from this server (YouTube does this to shared/datacenter IPs). Try a direct audio-file link (.mp3/.m4a), a non-YouTube source, or set YTDLP_PROXY.';
+    return 'That site blocked the request from our server (YouTube does this to shared servers). Try a direct audio-file link (.mp3/.m4a) or a non-YouTube source.';
   if (/unsupported url|no video formats|unable to (extract|download)|not a valid url/i.test(m))
     return 'Couldn’t find audio at that link.';
   if (/private|members-only|login required|age|drm/i.test(m))
@@ -614,17 +621,17 @@ function friendlyYtdlpError(msg) {
 }
 
 // In-progress extractions, keyed by URL. Extraction runs in the background so a
-// long track (e.g. a 1-hour video) never holds the HTTP request open past a
-// proxy timeout — the client polls this same endpoint and the dedupe check
-// hands back the finished song once it lands.
+// long track (e.g. a 1-hour video through the proxy) never holds the HTTP
+// request open past a proxy timeout — the client polls this same endpoint and
+// the dedupe check hands back the finished song once it lands.
 const urlJobs = new Map(); // url -> { status:'running'|'error', error?, startedAt }
 
 async function extractToSong(url) {
   const key       = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
   const outTmpl   = path.join(URL_CACHE, `${key}.%(ext)s`);
   const finalPath = path.join(URL_CACHE, `${key}.mp3`);
-  // Try direct first (so direct/most URLs never depend on the proxy), then fall
-  // back to YTDLP_PROXY only if the direct attempt fails.
+  // Try direct first (so direct/most URLs never depend on the proxy tunnel),
+  // then fall back to YTDLP_PROXY only if the direct attempt fails.
   let meta;
   try {
     meta = await runYtdlp(url, outTmpl, false);
@@ -634,24 +641,25 @@ async function extractToSong(url) {
   }
   if (!fs.existsSync(finalPath)) throw new Error('No audio could be extracted from that URL');
   const title = meta.title || url.replace(/^https?:\/\//, '').slice(0, 120);
-  db.prepare(
-    'INSERT INTO songs (filepath, source_url, thumbnail_url, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(finalPath, url, meta.thumbnail, title, meta.artist, '', meta.duration);
+  await db.run(
+    'INSERT INTO an_songs (filepath, source_url, thumbnail_url, title, artist, album, duration_sec) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [finalPath, url, meta.thumbnail, title, meta.artist, '', meta.duration]
+  );
 }
 
-function songForUrl(url) {
-  const s = db.prepare('SELECT * FROM songs WHERE source_url = ? AND deleted_at IS NULL').get(url);
+async function songForUrl(url) {
+  const s = await db.get('SELECT * FROM an_songs WHERE source_url = ? AND deleted_at IS NULL LIMIT 1', [url]);
   if (!s) return null;
-  const n = db.prepare('SELECT note_text FROM song_notes WHERE song_id = ?').get(s.id);
+  const n = await db.get('SELECT note_text FROM an_song_notes WHERE song_id = ?', [s.id]);
   return { ...s, has_note: (n && n.note_text) ? 1 : 0 };
 }
 
-app.post('/api/songs/from-url', (req, res) => {
+app.post('/api/songs/from-url', async (req, res) => {
   const url = ((req.body && req.body.url) || '').trim();
   if (!/^https?:\/\/\S+$/i.test(url)) return res.json({ error: 'Enter a valid http(s) URL' });
   try {
     // Already have it (finished on a previous poll, or added earlier)?
-    const done = songForUrl(url);
+    const done = await songForUrl(url);
     if (done) return res.json({ ...done, reused: true });
 
     // A job in flight for this URL?
@@ -679,16 +687,40 @@ app.post('/api/songs/from-url', (req, res) => {
 // App version — single source of truth for the UI footer
 app.get('/api/version', (req, res) => res.json({ version: VERSION }));
 
+// Deployment-specific presentation, served to the client so that what used to be
+// a hard-coded fork (WEB_MODE, chat widget, site badge) is now configuration.
+app.get('/api/config', (req, res) => res.json({
+  version:      VERSION,
+  webMode:      cfg.WEB_MODE,
+  chatEnabled:  cfg.CHAT_ENABLED,
+  chatEndpoint: cfg.CHAT_ENDPOINT,
+  siteBadge:    cfg.SITE_BADGE,
+  siteBadgeUrl: cfg.SITE_BADGE_URL,
+  brandName:    cfg.BRAND_NAME,
+  brandTagline: cfg.BRAND_TAGLINE,
+}));
+
 // Catch-all 404
 app.use((req, res) => {
   res.status(404).sendFile(path.join(__dirname, 'public', 'error.html'));
 });
-app.listen(PORT, '0.0.0.0', () => {
-  const os   = require('os');
-  const nets = Object.values(os.networkInterfaces()).flat().filter(n => n.family === 'IPv4' && !n.internal);
-  const ip   = nets.length ? nets[0].address : 'YOUR_IP';
-  console.log(`\nAudioNote v${VERSION}`);
-  console.log(`Local     : http://localhost:${PORT}`);
-  console.log(`Network   : http://${ip}:${PORT}`);
-  console.log(`Music root: ${MUSIC_ROOT}\n`);
-});
+
+const BIND = process.env.BIND_ADDR || '127.0.0.1';
+
+// Ensure the schema exists before accepting traffic. Idempotent on a populated DB.
+db.init()
+  .then(() => {
+    app.listen(PORT, BIND, () => {
+      const os   = require('os');
+      const nets = Object.values(os.networkInterfaces()).flat().filter(n => n.family === 'IPv4' && !n.internal);
+      const ip   = nets.length ? nets[0].address : 'YOUR_IP';
+      console.log(`\n${cfg.BRAND_NAME} v${VERSION}  [db=${db.dialect} prefix="${cfg.TABLE_PREFIX}"]`);
+      console.log(`Local     : http://localhost:${PORT}`);
+      console.log(`Network   : http://${ip}:${PORT}`);
+      console.log(`Music root: ${MUSIC_ROOT}\n`);
+    });
+  })
+  .catch(err => {
+    console.error('[AudioNote] database init failed — refusing to start:', err.message);
+    process.exit(1);
+  });
